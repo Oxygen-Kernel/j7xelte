@@ -315,6 +315,7 @@ struct dm_cache_migration {
 	dm_cblock_t cblock;
 
 	bool err:1;
+	bool discard:1;
 	bool writeback:1;
 	bool demote:1;
 	bool promote:1;
@@ -459,11 +460,12 @@ static void prealloc_put_cell(struct prealloc *p, struct dm_bio_prison_cell *cel
 
 /*----------------------------------------------------------------*/
 
-static void build_key(dm_oblock_t oblock, struct dm_cell_key *key)
+static void build_key(dm_oblock_t begin, dm_oblock_t end, struct dm_cell_key *key)
 {
 	key->virtual = 0;
 	key->dev = 0;
-	key->block = from_oblock(oblock);
+	key->block_begin = from_oblock(begin);
+	key->block_end = from_oblock(end);
 }
 
 /*
@@ -473,20 +475,30 @@ static void build_key(dm_oblock_t oblock, struct dm_cell_key *key)
  */
 typedef void (*cell_free_fn)(void *context, struct dm_bio_prison_cell *cell);
 
-static int bio_detain(struct cache *cache, dm_oblock_t oblock,
-		      struct bio *bio, struct dm_bio_prison_cell *cell_prealloc,
-		      cell_free_fn free_fn, void *free_context,
-		      struct dm_bio_prison_cell **cell_result)
+static int bio_detain_range(struct cache *cache, dm_oblock_t oblock_begin, dm_oblock_t oblock_end,
+			    struct bio *bio, struct dm_bio_prison_cell *cell_prealloc,
+			    cell_free_fn free_fn, void *free_context,
+			    struct dm_bio_prison_cell **cell_result)
 {
 	int r;
 	struct dm_cell_key key;
 
-	build_key(oblock, &key);
+	build_key(oblock_begin, oblock_end, &key);
 	r = dm_bio_detain(cache->prison, &key, bio, cell_prealloc, cell_result);
 	if (r)
 		free_fn(free_context, cell_prealloc);
 
 	return r;
+}
+
+static int bio_detain(struct cache *cache, dm_oblock_t oblock,
+		      struct bio *bio, struct dm_bio_prison_cell *cell_prealloc,
+		      cell_free_fn free_fn, void *free_context,
+		      struct dm_bio_prison_cell **cell_result)
+{
+	dm_oblock_t end = to_oblock(from_oblock(oblock) + 1ULL);
+	return bio_detain_range(cache, oblock, end, bio,
+				cell_prealloc, free_fn, free_context, cell_result);
 }
 
 static int get_cell(struct cache *cache,
@@ -500,7 +512,7 @@ static int get_cell(struct cache *cache,
 
 	cell_prealloc = prealloc_get_cell(structs);
 
-	build_key(oblock, &key);
+	build_key(oblock, to_oblock(from_oblock(oblock) + 1ULL), &key);
 	r = dm_get_cell(cache->prison, &key, cell_prealloc, cell_result);
 	if (r)
 		prealloc_put_cell(structs, cell_prealloc);
@@ -550,10 +562,34 @@ static dm_block_t block_div(dm_block_t b, uint32_t n)
 	return b;
 }
 
-static void set_discard(struct cache *cache, dm_oblock_t b)
+static dm_block_t oblocks_per_dblock(struct cache *cache)
+{
+	dm_block_t oblocks = cache->discard_block_size;
+
+	if (block_size_is_power_of_two(cache))
+		oblocks >>= cache->sectors_per_block_shift;
+	else
+		oblocks = block_div(oblocks, cache->sectors_per_block);
+
+	return oblocks;
+}
+
+static dm_dblock_t oblock_to_dblock(struct cache *cache, dm_oblock_t oblock)
+{
+	return to_dblock(block_div(from_oblock(oblock),
+				   oblocks_per_dblock(cache)));
+}
+
+static dm_oblock_t dblock_to_oblock(struct cache *cache, dm_dblock_t dblock)
+{
+	return to_oblock(from_dblock(dblock) * oblocks_per_dblock(cache));
+}
+
+static void set_discard(struct cache *cache, dm_dblock_t b)
 {
 	unsigned long flags;
 
+	BUG_ON(from_dblock(b) >= from_dblock(cache->discard_nr_blocks));
 	atomic_inc(&cache->stats.discard_count);
 
 	spin_lock_irqsave(&cache->lock, flags);
@@ -997,7 +1033,7 @@ static void copy_complete(int read_err, unsigned long write_err, void *context)
 	wake_worker(cache);
 }
 
-static void issue_copy_real(struct dm_cache_migration *mg)
+static void issue_copy(struct dm_cache_migration *mg)
 {
 	int r;
 	struct dm_io_region o_region, c_region;
@@ -1076,10 +1112,45 @@ static void avoid_copy(struct dm_cache_migration *mg)
 	migration_success_pre_commit(mg);
 }
 
-static void issue_copy(struct dm_cache_migration *mg)
+static void calc_discard_block_range(struct cache *cache, struct bio *bio,
+				     dm_dblock_t *b, dm_dblock_t *e)
+{
+	sector_t sb = bio->bi_iter.bi_sector;
+	sector_t se = bio_end_sector(bio);
+
+	*b = to_dblock(dm_sector_div_up(sb, cache->discard_block_size));
+
+	if (se - sb < cache->discard_block_size)
+		*e = *b;
+	else
+		*e = to_dblock(block_div(se, cache->discard_block_size));
+}
+
+static void issue_discard(struct dm_cache_migration *mg)
+{
+	dm_dblock_t b, e;
+	struct bio *bio = mg->new_ocell->holder;
+
+	calc_discard_block_range(mg->cache, bio, &b, &e);
+	while (b != e) {
+		set_discard(mg->cache, b);
+		b = to_dblock(from_dblock(b) + 1);
+	}
+
+	bio_endio(bio, 0);
+	cell_defer(mg->cache, mg->new_ocell, false);
+	free_migration(mg);
+}
+
+static void issue_copy_or_discard(struct dm_cache_migration *mg)
 {
 	bool avoid;
 	struct cache *cache = mg->cache;
+
+	if (mg->discard) {
+		issue_discard(mg);
+		return;
+	}
 
 	if (mg->writeback || mg->demote)
 		avoid = !is_dirty(cache, mg->cblock) ||
@@ -1096,7 +1167,7 @@ static void issue_copy(struct dm_cache_migration *mg)
 		}
 	}
 
-	avoid ? avoid_copy(mg) : issue_copy_real(mg);
+	avoid ? avoid_copy(mg) : issue_copy(mg);
 }
 
 static void complete_migration(struct dm_cache_migration *mg)
@@ -1181,6 +1252,7 @@ static void promote(struct cache *cache, struct prealloc *structs,
 	struct dm_cache_migration *mg = prealloc_get_migration(structs);
 
 	mg->err = false;
+	mg->discard = false;
 	mg->writeback = false;
 	mg->demote = false;
 	mg->promote = true;
@@ -1204,6 +1276,7 @@ static void writeback(struct cache *cache, struct prealloc *structs,
 	struct dm_cache_migration *mg = prealloc_get_migration(structs);
 
 	mg->err = false;
+	mg->discard = false;
 	mg->writeback = true;
 	mg->demote = false;
 	mg->promote = false;
@@ -1229,6 +1302,7 @@ static void demote_then_promote(struct cache *cache, struct prealloc *structs,
 	struct dm_cache_migration *mg = prealloc_get_migration(structs);
 
 	mg->err = false;
+	mg->discard = false;
 	mg->writeback = false;
 	mg->demote = true;
 	mg->promote = true;
@@ -1257,6 +1331,7 @@ static void invalidate(struct cache *cache, struct prealloc *structs,
 	struct dm_cache_migration *mg = prealloc_get_migration(structs);
 
 	mg->err = false;
+	mg->discard = false;
 	mg->writeback = false;
 	mg->demote = true;
 	mg->promote = false;
@@ -1270,6 +1345,26 @@ static void invalidate(struct cache *cache, struct prealloc *structs,
 	mg->start_jiffies = jiffies;
 
 	inc_io_migrations(cache);
+	quiesce_migration(mg);
+}
+
+static void discard(struct cache *cache, struct prealloc *structs,
+		    struct dm_bio_prison_cell *cell)
+{
+	struct dm_cache_migration *mg = prealloc_get_migration(structs);
+
+	mg->err = false;
+	mg->discard = true;
+	mg->writeback = false;
+	mg->demote = false;
+	mg->promote = false;
+	mg->requeue_holder = false;
+	mg->invalidate = false;
+	mg->cache = cache;
+	mg->old_ocell = NULL;
+	mg->new_ocell = cell;
+	mg->start_jiffies = jiffies;
+
 	quiesce_migration(mg);
 }
 
@@ -1306,31 +1401,27 @@ static void process_flush_bio(struct cache *cache, struct bio *bio)
 	issue(cache, bio);
 }
 
-/*
- * People generally discard large parts of a device, eg, the whole device
- * when formatting.  Splitting these large discards up into cache block
- * sized ios and then quiescing (always neccessary for discard) takes too
- * long.
- *
- * We keep it simple, and allow any size of discard to come in, and just
- * mark off blocks on the discard bitset.  No passdown occurs!
- *
- * To implement passdown we need to change the bio_prison such that a cell
- * can have a key that spans many blocks.
- */
-static void process_discard_bio(struct cache *cache, struct bio *bio)
+static void process_discard_bio(struct cache *cache, struct prealloc *structs,
+				struct bio *bio)
 {
-	dm_block_t start_block = dm_sector_div_up(bio->bi_iter.bi_sector,
-						  cache->sectors_per_block);
-	dm_block_t end_block = bio_end_sector(bio);
-	dm_block_t b;
+	int r;
+	dm_dblock_t b, e;
+	struct dm_bio_prison_cell *cell_prealloc, *new_ocell;
 
-	end_block = block_div(end_block, cache->sectors_per_block);
+	calc_discard_block_range(cache, bio, &b, &e);
+	if (b == e) {
+		bio_endio(bio, 0);
+		return;
+	}
 
-	for (b = start_block; b < end_block; b++)
-		set_discard(cache, to_oblock(b));
+	cell_prealloc = prealloc_get_cell(structs);
+	r = bio_detain_range(cache, dblock_to_oblock(cache, b), dblock_to_oblock(cache, e), bio, cell_prealloc,
+			     (cell_free_fn) prealloc_put_cell,
+			     structs, &new_ocell);
+	if (r > 0)
+		return;
 
-	bio_endio(bio, 0);
+	discard(cache, structs, new_ocell);
 }
 
 static bool spare_migration_bandwidth(struct cache *cache)
@@ -1520,7 +1611,7 @@ static void process_deferred_bios(struct cache *cache)
 		if (bio->bi_rw & REQ_FLUSH)
 			process_flush_bio(cache, bio);
 		else if (bio->bi_rw & REQ_DISCARD)
-			process_discard_bio(cache, bio);
+			process_discard_bio(cache, &structs, bio);
 		else
 			process_bio(cache, &structs, bio);
 	}
@@ -1735,7 +1826,7 @@ static void do_worker(struct work_struct *ws)
 			process_invalidation_requests(cache);
 		}
 
-		process_migrations(cache, &cache->quiesced_migrations, issue_copy);
+		process_migrations(cache, &cache->quiesced_migrations, issue_copy_or_discard);
 		process_migrations(cache, &cache->completed_migrations, complete_migration);
 
 		if (commit_if_needed(cache)) {
@@ -3095,8 +3186,9 @@ static void set_discard_limits(struct cache *cache, struct queue_limits *limits)
 	/*
 	 * FIXME: these limits may be incompatible with the cache device
 	 */
-	limits->max_discard_sectors = cache->sectors_per_block;
-	limits->discard_granularity = cache->sectors_per_block << SECTOR_SHIFT;
+	limits->max_discard_sectors = min_t(sector_t, cache->discard_block_size * 1024,
+					    cache->origin_sectors);
+	limits->discard_granularity = cache->discard_block_size << SECTOR_SHIFT;
 }
 
 static void cache_io_hints(struct dm_target *ti, struct queue_limits *limits)
@@ -3120,7 +3212,7 @@ static void cache_io_hints(struct dm_target *ti, struct queue_limits *limits)
 
 static struct target_type cache_target = {
 	.name = "cache",
-	.version = {1, 5, 0},
+	.version = {1, 6, 0},
 	.module = THIS_MODULE,
 	.ctr = cache_ctr,
 	.dtr = cache_dtr,

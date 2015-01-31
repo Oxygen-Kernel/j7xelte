@@ -1667,9 +1667,10 @@ static unsigned int __cpufreq_get(unsigned int cpu)
 	if (!cpufreq_driver->get)
 		return ret_freq;
 
-	read_lock_irqsave(&cpufreq_driver_lock, flags);
+	write_lock_irqsave(&cpufreq_driver_lock, flags);
 	policy = per_cpu(cpufreq_cpu_data, cpu);
-	read_unlock_irqrestore(&cpufreq_driver_lock, flags);
+	per_cpu(cpufreq_cpu_data, cpu) = NULL;
+	write_unlock_irqrestore(&cpufreq_driver_lock, flags);
 
 	ret_freq = cpufreq_driver->get(cpu);
 

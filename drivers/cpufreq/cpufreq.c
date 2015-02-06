@@ -558,16 +558,26 @@ static ssize_t store_##file_name					\
 	if (ret)							\
 		return -EINVAL;						\
 									\
+	new_policy.min = new_policy.user_policy.min;			\
+	new_policy.max = new_policy.user_policy.max;			\
+									\
 	ret = sscanf(buf, "%u", &new_policy.object);			\
 	if (ret != 1)							\
 		return -EINVAL;						\
 									\
-	temp = new_policy.object;					\
-	ret = cpufreq_set_policy(policy, &new_policy);		\
-	if (!ret)							\
-		policy->user_policy.object = temp;			\
+	cpufreq_verify_within_cpu_limits(&new_policy);			\
+	if (new_policy.min > new_policy.user_policy.max			\
+	    || new_policy.max < new_policy.user_policy.min)		\
+		return -EINVAL;						\
 									\
-	return ret ? ret : count;					\
+	policy->user_policy.object = new_policy.object;			\
+									\
+									\
+	ret = cpufreq_set_policy(policy, &new_policy);			\
+	if (ret)							\
+		pr_warn("User policy not enforced yet!\n");		\
+									\
+	return count;							\
 }
 
 store_one(scaling_min_freq, min);
@@ -2253,10 +2263,6 @@ static int cpufreq_set_policy(struct cpufreq_policy *policy,
 		 new_policy->cpu, new_policy->min, new_policy->max);
 
 	memcpy(&new_policy->cpuinfo, &policy->cpuinfo, sizeof(policy->cpuinfo));
-
-	if (new_policy->min > policy->user_policy.max
-	    || new_policy->max < policy->user_policy.min)
-		return -EINVAL;
 
 	/* verify the cpu speed can be set within this limit */
 	ret = cpufreq_driver->verify(new_policy);

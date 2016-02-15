@@ -123,6 +123,9 @@ extern void syscall_unregfunc(void);
 		void *it_func;						\
 		void *__data;						\
 									\
+		if (!cpu_online(raw_smp_processor_id()))		\
+			return;						\
+									\
 		if (!(cond))						\
 			return;						\
 		prercu;							\

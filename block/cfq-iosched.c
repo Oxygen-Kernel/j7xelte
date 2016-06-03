@@ -30,9 +30,7 @@ static const int cfq_back_penalty = 2;
 static const int cfq_slice_sync = HZ / 10;
 static int cfq_slice_async = HZ / 25;
 static const int cfq_slice_async_rq = 2;
-/* Explicitly set cfq_slice_idle to 0 */
 static int cfq_slice_idle = 0;
-/* static int cfq_slice_idle = HZ / 125; */
 static int cfq_group_idle = HZ / 125;
 static const int cfq_target_latency = HZ * 3/10; /* 300 ms */
 static const int cfq_hist_divisor = 4;
@@ -4658,11 +4656,8 @@ static int __init cfq_init(void)
 	 */
 	if (!cfq_slice_async)
 		cfq_slice_async = 1;
-	/* Do not touch cfq_slice_idle if it is zero */
-	/*
 	if (!cfq_slice_idle)
-		cfq_slice_idle = 1;
-	*/
+		cfq_slice_idle = 0;
 
 #ifdef CONFIG_CFQ_GROUP_IOSCHED
 	if (!cfq_group_idle)
@@ -4710,3 +4705,4 @@ module_exit(cfq_exit);
 MODULE_AUTHOR("Jens Axboe");
 MODULE_LICENSE("GPL");
 MODULE_DESCRIPTION("Completely Fair Queueing IO scheduler");
+

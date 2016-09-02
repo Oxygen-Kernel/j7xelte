@@ -119,6 +119,7 @@ static unsigned long lowmem_scan(struct shrinker *s, struct shrink_control *sc)
 						global_page_state(NR_SHMEM) -
 						global_page_state(NR_UNEVICTABLE) -
 						total_swapcache_pages();
+						global_page_state(NR_UNEVICTABLE);
 	struct reclaim_state *reclaim_state = current->reclaim_state;
 
 #ifdef CONFIG_CMA

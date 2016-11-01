@@ -650,6 +650,9 @@ else
 KBUILD_CFLAGS	+= -O2
 endif
 
+KBUILD_CFLAGS 	+= $(call cc-disable-warning,maybe-uninitialized,)
+KBUILD_CFLAGS 	+= $(call cc-disable-warning, unused-variable)
+
 # Tell gcc to never replace conditional load with a non-conditional one
 KBUILD_CFLAGS	+= $(call cc-option,--param=allow-store-data-races=0)
 

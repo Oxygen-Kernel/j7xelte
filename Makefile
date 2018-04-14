@@ -976,8 +976,6 @@ endif
 	+$(call if_changed,link-vmlinux)
 
 PHONY += print_info
-print_info:
-	@echo "INFO: CC is $(CC)"
 
 # The actual objects are generated when descending,
 # make sure no implicit rule kicks in

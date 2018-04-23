@@ -317,8 +317,8 @@ scale_freq_capacity(struct cpufreq_policy *policy, struct cpufreq_freqs *freqs)
 	struct cpufreq_cpuinfo *cpuinfo = &policy->cpuinfo;
 	int cpu;
 
-	pr_debug("cpus %*pbl cur/cur max freq %lu/%u kHz freq scale %lu\n",
-		 cpumask_pr_args(policy->cpus), cur, policy->max, scale);
+//	pr_debug("cpus %*pbl cur/cur max freq %lu/%u kHz freq scale %lu\n",
+//		 cpumask_pr_args(policy->cpus), cur, policy->max, scale);
 
 	for_each_cpu(cpu, policy->cpus)
 		per_cpu(freq_scale, cpu) = scale;
@@ -328,9 +328,9 @@ scale_freq_capacity(struct cpufreq_policy *policy, struct cpufreq_freqs *freqs)
 
 	scale = (policy->max << SCHED_CAPACITY_SHIFT) / cpuinfo->max_freq;
 
-	pr_debug("cpus %*pbl cur max/max freq %u/%u kHz max freq scale %lu\n",
-		 cpumask_pr_args(policy->cpus), policy->max, cpuinfo->max_freq,
-		 scale);
+//	pr_debug("cpus %*pbl cur max/max freq %u/%u kHz max freq scale %lu\n",
+//		 cpumask_pr_args(policy->cpus), policy->max, cpuinfo->max_freq,
+//		 scale);
 
 	for_each_cpu(cpu, policy->cpus)
 		per_cpu(max_freq_scale, cpu) = scale;

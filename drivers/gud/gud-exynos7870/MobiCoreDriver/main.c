@@ -419,8 +419,13 @@ static int mobicore_start(void)
 	}
 #endif
 
+	ret = device_user_init();
+	if (ret)
+		goto err_create_dev_user;
+
 	return 0;
 
+err_create_dev_user:
 #ifdef MC_PM_RUNTIME
 	unregister_reboot_notifier(&main_ctx.reboot_notifier);
 	unregister_pm_notifier(&main_ctx.pm_notifier);
@@ -622,11 +627,7 @@ static int mobicore_probe(struct platform_device *pdev)
 	*/
 	err = device_admin_init();
 	if (err)
-		goto fail_create_dev;
-
-	err = device_user_init();
-	if (err)
-		goto fail_create_dev;
+		goto fail_creat_dev_admin;
 
 	/*
 	 * ExySp: for sos performance
@@ -636,7 +637,7 @@ static int mobicore_probe(struct platform_device *pdev)
 
 		return 0;
 
-fail_create_dev:
+fail_creat_dev_admin:
 	mc_scheduler_exit();
 fail_mc_device_sched_init:
 	mc_logging_exit();

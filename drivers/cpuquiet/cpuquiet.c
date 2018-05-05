@@ -159,11 +159,11 @@ static void __cpuinit cpuquiet_work_func(struct work_struct *work)
 	mutex_lock(&cpuquiet_min_max_cpus_lock);
 
 	max_cpus = min_t(unsigned int,
-				pm_qos_request(PM_QOS_MAX_ONLINE_CPUS) ? :
+				pm_qos_request(PM_QOS_CPU_ONLINE_MAX) ? :
 							num_present_cpus(),
 				cpuquiet_nr_max_cpus);
 	min_cpus = max_t(unsigned int,
-				pm_qos_request(PM_QOS_MIN_ONLINE_CPUS),
+				pm_qos_request(PM_QOS_CPU_ONLINE_MIN),
 				cpuquiet_nr_min_cpus);
 
 	mutex_unlock(&cpuquiet_min_max_cpus_lock);
@@ -335,22 +335,22 @@ static int __init cpuquiet_probe(struct platform_device *pdev)
 	cpumask_clear(&cr_online_requests);
 	cpumask_clear(&cr_offline_requests);
 
-	err = pm_qos_add_notifier(PM_QOS_MIN_ONLINE_CPUS,
+	err = pm_qos_add_notifier(PM_QOS_CPU_ONLINE_MIN,
 						&minmax_cpus_notifier);
 	if (err) {
 		pr_err("Failed to register min cpus PM QoS notifier\n");
 		goto destroy_wq;
 	}
-	err = pm_qos_add_notifier(PM_QOS_MAX_ONLINE_CPUS,
+	err = pm_qos_add_notifier(PM_QOS_CPU_ONLINE_MAX,
 						&minmax_cpus_notifier);
 	if (err) {
 		pr_err("Failed to register max cpus PM QoS notifier\n");
 		goto remove_min;
 	}
 
-	cpuquiet_nr_max_cpus = pm_qos_request(PM_QOS_MAX_ONLINE_CPUS) ? :
+	cpuquiet_nr_max_cpus = pm_qos_request(PM_QOS_CPU_ONLINE_MAX) ? :
 							num_present_cpus();
-	cpuquiet_nr_min_cpus = pm_qos_request(PM_QOS_MIN_ONLINE_CPUS);
+	cpuquiet_nr_min_cpus = pm_qos_request(PM_QOS_CPU_ONLINE_MIN);
 
 	err = cpuquiet_register_devices();
 	if (err)
@@ -359,9 +359,9 @@ static int __init cpuquiet_probe(struct platform_device *pdev)
 	return 0;
 
 remove_max:
-	pm_qos_remove_notifier(PM_QOS_MAX_ONLINE_CPUS, &minmax_cpus_notifier);
+	pm_qos_remove_notifier(PM_QOS_CPU_ONLINE_MAX, &minmax_cpus_notifier);
 remove_min:
-	pm_qos_remove_notifier(PM_QOS_MIN_ONLINE_CPUS, &minmax_cpus_notifier);
+	pm_qos_remove_notifier(PM_QOS_CPU_ONLINE_MIN, &minmax_cpus_notifier);
 destroy_wq:
 	destroy_workqueue(cpuquiet_wq);
 
@@ -372,8 +372,8 @@ static int cpuquiet_remove(struct platform_device *pdev)
 {
 
 	cpuquiet_unregister_devices();
-	pm_qos_remove_notifier(PM_QOS_MAX_ONLINE_CPUS, &minmax_cpus_notifier);
-	pm_qos_remove_notifier(PM_QOS_MIN_ONLINE_CPUS, &minmax_cpus_notifier);
+	pm_qos_remove_notifier(PM_QOS_CPU_ONLINE_MAX, &minmax_cpus_notifier);
+	pm_qos_remove_notifier(PM_QOS_CPU_ONLINE_MIN, &minmax_cpus_notifier);
 	destroy_workqueue(cpuquiet_wq);
 
 	return 0;

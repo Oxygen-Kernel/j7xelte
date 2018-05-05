@@ -423,7 +423,7 @@ static CPU_SPEED_BALANCE balanced_speed_balance(void)
 	unsigned long balanced_speed = highest_speed * balance_level / 100;
 	unsigned long skewed_speed = balanced_speed / 2;
 	unsigned int nr_cpus = num_online_cpus();
-	unsigned int max_cpus = pm_qos_request(PM_QOS_MAX_ONLINE_CPUS) ? : CONFIG_NR_CPUS;
+	unsigned int max_cpus = pm_qos_request(PM_QOS_CPU_ONLINE_MAX) ? : CONFIG_NR_CPUS;
 
 	unsigned int avg_nr_run = get_nr_run_avg();
 	unsigned int nr_run;
